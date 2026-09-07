@@ -99,3 +99,80 @@ Two answers corrected during the interview, both worth remembering:
   thresholds instead — interviewers probe exactly here.
 
 **Still open in stage 00:** docker group (needs logout), push protection, kind cluster, ADR merge.
+
+## Session 5 — 2026-09-07
+
+Stage 00 closed.
+
+**Docker group fix worked, but restarting the daemon broke the kind cluster.**
+The `kind` docker network was left in an inconsistent state: the daemon still
+held a network record with ID `3b232c9e…`, but no matching kernel bridge
+existed (`ip link show | grep br-3b232c9e` returned nothing). Containers
+attached to it could not be started — `docker start` failed with
+"network … does not exist" while `docker network ls` listed it.
+
+Removing the stale network exposed the real cause. Recreating it failed with:
+
+```
+ip6tables: No chain/target/match by that name
+```
+
+Docker creates the `kind` network with IPv6 enabled and then installs
+ip6tables rules into a `DOCKER` chain it creates at daemon startup. That chain
+was missing, so network creation half-completed and the bridge never survived.
+The kernel modules (`ip6_tables`, `ip6table_filter`) were loaded, so this was
+Docker's own chain setup, not a missing module. `systemctl restart docker`
+rebuilt the chains and the network created cleanly.
+
+Correction to an earlier assumption: the cluster did not break at reboot. It
+broke when the daemon restarted to pick up the new `docker` group membership.
+A reboot would not have fixed it.
+
+**Changes to `ballast-platform/kind-ballast.yaml`:**
+
+- Added a second worker. With one worker, `kubectl drain` leaves pods Pending
+  and demonstrates nothing.
+- Pinned `kindest/node:v1.31.0` on every node. The config previously named no
+  image, so this recreate silently pulled v1.36.1 — the cluster's Kubernetes
+  version had drifted without any change to the config. Local-first only works
+  if local matches what EKS will run. Revisit at stage 02 and move both
+  together.
+- Kept the 8080/8443 host port mappings. Ports below 1024 invite conflicts and
+  buy nothing here.
+
+**pre-commit was still installed** in `.git/hooks` despite the decision to drop
+it, and blocked the first commit with "No .pre-commit-config.yaml file was
+found". Removed with `pre-commit uninstall`. It returns at stage 05, once CI
+exists and there is something for it to check.
+
+**Repository initialised.** Local branch renamed `master` → `main` before the
+first push, since the remote was empty and the first push fixes the default
+branch name permanently. Added README (credential and account conventions) and
+.gitignore (Terraform state, anything credential-shaped). ADR-0001 committed
+and pushed.
+
+**Cluster verified:** three nodes Ready on v1.31.0, 13 system pods Running.
+
+### Stage 00 state
+
+| Item | State |
+| --- | --- |
+| SSO profile `ballast`, no `[default]` | done |
+| Budget alarm | done |
+| Access key deactivated | done — delete on or after 2026-09-13 |
+| Docker group membership | done |
+| GitHub push protection | done |
+| kind cluster, 3 nodes Ready | done |
+| ADR-0001 pushed to `main` | done |
+| `go env -u GO111MODULE` | needed before stage 01's Go exporter |
+| Drain exercise | optional, not yet run |
+
+### Still open
+
+- Root account: MFA enabled and zero access keys? Verify with
+  `aws iam generate-credential-report`.
+- Domain name for stage 03 DNS/TLS (~$12/yr, needed by week 6).
+
+### Next
+
+Stage 01 — Nook's services get built. Mostly my hours, not yours.
