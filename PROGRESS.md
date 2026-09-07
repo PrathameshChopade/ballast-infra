@@ -176,3 +176,95 @@ and pushed.
 ### Next
 
 Stage 01 — Nook's services get built. Mostly my hours, not yours.
+
+## Session 6 — 2026-09-07
+
+Stage 01 complete. Five services built, running and verified end to end.
+
+`nook-app` now holds: `api` (Fastify + Zod-generated OpenAPI), `collab`
+(Yjs + Redis backplane), `worker` (BullMQ), `exporter` (Go, distroless),
+`web` (React + Vite + TipTap), a two-migration schema, and a Makefile.
+
+### Verified, not assumed
+
+- Two clients converge on one replica, on two replicas, and through the
+  nginx WebSocket proxy.
+- Both replicas killed; a reconnecting client restores the document from
+  Postgres.
+- Cross-workspace access refused at every route and at the WebSocket
+  handshake.
+- Export runs API -> BullMQ -> Go exporter -> S3 -> presigned download.
+- Presigned attachment upload, confirm and download; oversize refused 413.
+- `make clean && make dev`: destroyed volumes to working stack in 22s.
+
+### Image sizes — the stage 05 table
+
+| Image | Size |
+| --- | --- |
+| `exporter` (distroless static) | 7.2 MB |
+| `api` (node slim) | 279 MB |
+| `collab` (node slim) | 283 MB |
+
+### Bugs found and fixed
+
+**Initial sync was broken and the first test passed anyway.** A client
+joining an existing document received nothing. In the Yjs protocol a sync
+step 1 asks the *other* side for what it lacks, so the server's step 1
+only moves data client-to-server; the client must send its own. The
+two-client test passed because A typed after both had connected and live
+broadcast covered for it. It only surfaced when a client connected to a
+document written before it existed. The required sequence is now in
+`protocol.ts`.
+
+**Non-retryable job failures were retried.** A PDF export took 22 seconds
+and four attempts to reach the 501 it was always going to get. Now thrown
+as `UnrecoverableError`: one attempt, one second.
+
+**Presigned URLs pointed at an unreachable host.** The endpoint the SDK
+talks to and the endpoint signed into a URL for a browser are different
+whenever the service sits behind an internal name. The signature covers
+the host, so it cannot be rewritten afterwards.
+
+### Environment problems fixed
+
+- `docker compose` did not exist — apt `docker.io` ships no compose
+  plugin. Symlinked the snap's standalone binary into
+  `~/.docker/cli-plugins/`. It reports v5.3.1, which is not an upstream
+  version number; treat its behaviour as unverified against the docs.
+- `docker buildx` missing, so BuildKit refused to run. Symlinked from
+  `/snap/docker/current/usr/libexec/docker/cli-plugins/docker-buildx`.
+- corepack inside `node:22.11.0` carries npm's rotated registry signing
+  key and dies on signature verification. The popular workaround,
+  `COREPACK_INTEGRITY_KEYS=0`, disables signature verification of the
+  package manager — declined. pnpm is installed via npm at a pinned
+  version instead.
+- Compose `web` collided with the kind cluster on host port 8080. Moved
+  to 8090.
+- `pkill -f 'node dist/server.js'` killed the shell running it: the
+  shell's own command line contained the pattern.
+
+### Stage 01 checkpoints
+
+Done: data model, api, web, collab, worker, exporter, attachments and
+search, probes/metrics/logs/SIGTERM on every service, multi-stage
+Dockerfiles, one-command compose, ADR-0002, and the cut list held.
+
+### Next: stage 02 — and the roles swap
+
+From here Prathmesh writes the Terraform and I review. First task is the
+state backend and its bootstrap paradox: the S3 bucket holding state must
+exist before Terraform can store state in it.
+
+Note the roadmap is half-dated on this. It says "S3 with DynamoDB
+locking"; since Terraform 1.10 the S3 backend does native locking with
+`use_lockfile = true` and no DynamoDB table. Terraform here is 1.15.7, so
+both work. Picking one and defending it is ADR-0004.
+
+### Still open
+
+- Domain name (~$12/yr) — needed by week 6, blocking stage 03.
+- Root account: MFA on and zero access keys? `aws iam
+  generate-credential-report`.
+- Delete the deactivated access key on or after 2026-09-13.
+- `tflint`, `tfsec`, `infracost` not installed — stage 02 task 8 and
+  stage 09, installed when there is something to point them at.
